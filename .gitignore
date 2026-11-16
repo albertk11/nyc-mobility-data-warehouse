@@ -1,0 +1,19 @@
+# Dati grezzi e volumi Docker
+*.parquet
+*.csv
+*.csv.gz
+postgres_data/
+pgadmin_data/
+
+# Ambiente Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# OS & IDE
+.DS_Store
+.vscode/
+
+*.dbdiagram

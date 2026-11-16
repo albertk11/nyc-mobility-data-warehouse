@@ -1,0 +1,63 @@
+Project nyc_mobility_dwh {
+  database_type: 'PostgreSQL'
+  Note: 'Kimball Star Schema for NYC Green Taxi Mobility Data Warehouse (2025-11)'
+}
+
+Table dim_datetime {
+  datetime_sk integer [pk, note: 'Smart key YYYYMMDDHH24']
+  full_datetime timestamp [not null, unique]
+  date_actual date [not null]
+  year_number integer [not null]
+  month_number integer [not null]
+  day_of_month integer [not null]
+  hour_of_day integer [not null]
+  day_of_week_iso integer [not null]
+  day_name varchar(10) [not null]
+  is_weekend boolean [not null]
+  is_rush_hour boolean [not null]
+}
+
+Table dim_zones {
+  zone_sk integer [pk, increment, note: 'Surrogate Key (SCD Type 2)']
+  location_id integer [not null, note: 'NYC TLC Business Key']
+  borough varchar(50) [not null]
+  zone varchar(100) [not null]
+  service_zone varchar(50) [not null]
+  valid_from timestamp [not null, note: 'SCD2 effective start timestamp']
+  valid_to timestamp [not null, note: 'SCD2 expiration timestamp (9999-12-31 = active)']
+  is_current boolean [not null, note: 'Partial unique index on location_id WHERE is_current = TRUE']
+}
+
+Table fact_trips {
+  trip_sk varchar(32) [pk, note: 'MD5 deterministic surrogate key']
+  pickup_datetime_sk integer [not null, note: 'FK -> dim_datetime (B-Tree indexed)']
+  dropoff_datetime_sk integer [not null, note: 'FK -> dim_datetime (B-Tree indexed)']
+  pu_zone_sk integer [not null, note: 'FK -> dim_zones (B-Tree indexed)']
+  do_zone_sk integer [not null, note: 'FK -> dim_zones (B-Tree indexed)']
+  vendor_id integer [not null]
+  rate_code_id integer [not null]
+  payment_type integer [not null]
+  trip_type integer [not null]
+  store_and_fwd_flag varchar(1) [not null]
+  pickup_datetime timestamp [not null, note: 'B-Tree indexed']
+  dropoff_datetime timestamp [not null]
+  passenger_count integer [not null]
+  trip_distance numeric(10,2) [not null]
+  trip_duration_minutes numeric(10,2) [not null]
+  fare_amount numeric(10,2) [not null]
+  extra numeric(10,2) [not null]
+  mta_tax numeric(10,2) [not null]
+  tip_amount numeric(10,2) [not null]
+  tolls_amount numeric(10,2) [not null]
+  ehail_fee numeric(10,2) [not null]
+  improvement_surcharge numeric(10,2) [not null]
+  congestion_surcharge numeric(10,2) [not null]
+  cbd_congestion_fee numeric(10,2) [not null]
+  total_amount numeric(10,2) [not null]
+}
+
+// Role-Playing Dimension Relationships
+Ref: fact_trips.pickup_datetime_sk > dim_datetime.datetime_sk
+Ref: fact_trips.dropoff_datetime_sk > dim_datetime.datetime_sk
+Ref: fact_trips.pu_zone_sk > dim_zones.zone_sk
+Ref: fact_trips.do_zone_sk > dim_zones.zone_sk

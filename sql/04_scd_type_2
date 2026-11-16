@@ -1,0 +1,97 @@
+-- =============================================================================
+-- 04_scd_type_2.sql
+-- Purpose: Upgrade dim_zones to a Slowly Changing Dimension Type 2
+--          (valid_from, valid_to, is_current) and simulate a historical
+--          attribute change without losing past Fact Table accuracy.
+-- =============================================================================
+
+BEGIN;
+
+-- 1. Add SCD Type 2 metadata columns to dim_zones (Idempotent)
+ALTER TABLE dim_zones
+    ADD COLUMN IF NOT EXISTS valid_from TIMESTAMP NOT NULL DEFAULT TIMESTAMP '2025-11-01 00:00:00',
+    ADD COLUMN IF NOT EXISTS valid_to TIMESTAMP NOT NULL DEFAULT TIMESTAMP '9999-12-31 23:59:59',
+    ADD COLUMN IF NOT EXISTS is_current BOOLEAN NOT NULL DEFAULT TRUE;
+
+-- 2. Reset any prior simulation state so the script remains 100% idempotent
+DELETE FROM dim_zones
+WHERE location_id = 74
+  AND valid_from = TIMESTAMP '2025-12-01 00:00:00';
+
+UPDATE dim_zones
+SET
+    service_zone = 'Boro Zone',
+    valid_to = TIMESTAMP '9999-12-31 23:59:59',
+    is_current = TRUE
+WHERE location_id = 74
+  AND valid_from = TIMESTAMP '2025-11-01 00:00:00';
+
+-- 3. Enforce at most ONE active record per Business Key (Partial Unique Index)
+CREATE UNIQUE INDEX IF NOT EXISTS uq_dim_zones_current_location
+    ON dim_zones (location_id)
+    WHERE is_current = TRUE;
+
+-- 4. Stage incoming zone attribute changes (simulating a TLC policy change on 2025-12-01)
+DROP TABLE IF EXISTS tmp_zone_updates;
+
+CREATE TEMP TABLE tmp_zone_updates (
+    location_id INTEGER NOT NULL,
+    borough VARCHAR(50) NOT NULL,
+    zone VARCHAR(100) NOT NULL,
+    service_zone VARCHAR(50) NOT NULL,
+    effective_at TIMESTAMP NOT NULL
+) ON COMMIT DROP;
+
+INSERT INTO tmp_zone_updates (location_id, borough, zone, service_zone, effective_at)
+VALUES (74, 'Manhattan', 'East Harlem North', 'Yellow Zone', TIMESTAMP '2025-12-01 00:00:00');
+
+-- Step A: Expire current active records where any tracked attribute changed
+UPDATE dim_zones AS dz
+SET
+    valid_to = u.effective_at - INTERVAL '1 second',
+    is_current = FALSE
+FROM tmp_zone_updates AS u
+WHERE dz.location_id = u.location_id
+  AND dz.is_current = TRUE
+  AND (
+      dz.borough IS DISTINCT FROM u.borough
+      OR dz.zone IS DISTINCT FROM u.zone
+      OR dz.service_zone IS DISTINCT FROM u.service_zone
+  );
+
+-- Step B: Insert new active version using CTE anti-join (auto-generates a new zone_sk)
+WITH pending_inserts AS (
+    SELECT
+        u.location_id,
+        u.borough,
+        u.zone,
+        u.service_zone,
+        u.effective_at AS valid_from,
+        TIMESTAMP '9999-12-31 23:59:59' AS valid_to,
+        TRUE AS is_current
+    FROM tmp_zone_updates AS u
+    LEFT JOIN dim_zones AS dz
+        ON u.location_id = dz.location_id
+       AND dz.is_current = TRUE
+    WHERE dz.location_id IS NULL
+)
+INSERT INTO dim_zones (
+    location_id,
+    borough,
+    zone,
+    service_zone,
+    valid_from,
+    valid_to,
+    is_current
+)
+SELECT
+    location_id,
+    borough,
+    zone,
+    service_zone,
+    valid_from,
+    valid_to,
+    is_current
+FROM pending_inserts;
+
+COMMIT;
